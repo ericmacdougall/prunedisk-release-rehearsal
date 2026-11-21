@@ -1,0 +1,157 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  lint:
+    name: fmt and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Save a formatting patch when the check fails
+        if: failure()
+        run: |
+          cargo fmt --all
+          git diff > fmt.patch || true
+      - name: Upload the formatting patch
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fmt-patch
+          path: fmt.patch
+          if-no-files-found: ignore
+      - name: Clippy
+        if: always()
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: git version
+        run: git --version
+      - name: Test
+        run: cargo test --workspace --locked --no-fail-fast
+      - name: Show whether the wrong-case guard ran
+        if: ${{ !cancelled() }}
+        run: cargo test -p disk-cleaner-core --locked --test worktree_config a_bare_repo_under_a_wrong_case_scan_root -- --nocapture
+
+  mount-test:
+    name: one-file-system on a real mount (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Mount two tmpfs inside a scan root (in node_modules and in a repo)
+        run: |
+          for m in proj/node_modules/mnt repo/data; do
+            mkdir -p "$RUNNER_TEMP/mnttest/$m"
+            sudo mount -t tmpfs -o size=16m tmpfs "$RUNNER_TEMP/mnttest/$m"
+            sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/mnttest/$m"
+          done
+      - name: Test
+        env:
+          DC_TEST_MOUNT_ROOT: ${{ runner.temp }}/mnttest
+        run: cargo test -p disk-cleaner-core --locked --test mount -- --nocapture
+      - name: Mount two tmpfs under node_modules in two more scan directories
+        if: success() || failure()
+        run: |
+          for m in withrepo/proj/node_modules/mnt control/proj/node_modules/mnt; do
+            mkdir -p "$RUNNER_TEMP/aliastest/$m"
+            sudo mount -t tmpfs -o size=16m tmpfs "$RUNNER_TEMP/aliastest/$m"
+            sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/aliastest/$m"
+          done
+      - name: Test a nested root spelled through a symlink alias
+        if: success() || failure()
+        env:
+          DC_TEST_ALIAS_MOUNT_ROOT: ${{ runner.temp }}/aliastest
+        run: cargo test -p disk-cleaner-core --locked --test mount_alias -- --nocapture
+      - name: Create a repository owned by another user (root)
+        if: success() || failure()
+        run: |
+          f="$RUNNER_TEMP/foreign/scan/theirs"
+          sudo mkdir -p "$f"
+          sudo git -C "$f" init -q -b main
+          echo hello | sudo tee "$f/README.md" > /dev/null
+          sudo git -C "$f" add README.md
+          sudo git -C "$f" -c user.name=Test -c user.email=test@example.invalid commit -q -m init
+      - name: Test a repository owned by another user
+        if: success() || failure()
+        env:
+          DC_TEST_FOREIGN_ROOT: ${{ runner.temp }}/foreign/scan
+        run: cargo test -p disk-cleaner-core --locked --test foreign_owner -- --nocapture
+
+  binaries:
+    name: binary (${{ matrix.target }})
+    needs: [lint, test, mount-test, licenses]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            exe: disk-cleaner
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            exe: disk-cleaner
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            exe: disk-cleaner.exe
+    steps:
+      # Actions added for the binary job are pinned to commit SHAs.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }} -p disk-cleaner-cli
+      - name: Stage binary and checksum
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" dist/
+          cd dist
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${{ matrix.exe }}" > SHA256SUMS
+          else
+            shasum -a 256 "${{ matrix.exe }}" > SHA256SUMS
+          fi
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: disk-cleaner-${{ matrix.target }}
+          path: dist/*
+          retention-days: 14
+          if-no-files-found: error
+
+  licenses:
+    name: cargo deny licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses

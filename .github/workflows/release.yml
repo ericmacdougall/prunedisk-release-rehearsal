@@ -1,0 +1,300 @@
+name: release
+
+# Builds the command-line program for each platform, packages it with the license and README, writes
+# SHA256SUMS, attests build provenance, and (for a version tag only) creates a DRAFT GitHub release.
+#
+#   * Push a tag like v0.1.0: builds, then creates a draft release. A maintainer reads it and
+#     publishes it by hand (see docs/RELEASING.md). Nothing is published automatically.
+#   * Run it by hand from the Actions tab ("Run workflow") on a branch: the rehearsal. It builds,
+#     packages and attests exactly as a tag does, checks that its attestations do NOT pass the
+#     published verification command, and keeps the files as workflow artifacts. It never creates a
+#     release or a tag.
+#
+# The guards live in .github/scripts/release_meta.py and are tested there. Rules for this file
+# (checked by `release_meta.py lint-workflow` in the tests): no ${{ }} inside any run script (values
+# reach scripts through env only); every guard is a step whose whole script is one call to the guard
+# script; every job after meta checks out the commit meta checked. These guards are hygiene: the
+# repository settings and the maintainer's publish step are the real control (docs/RELEASING.md).
+#
+# The binaries are not code-signed or notarized. The release notes say so.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  # The binary and package names live here and nowhere else in this file. The planned rename from
+  # disk-cleaner to prunedisk is a change to these two lines (and the repository slug is read from
+  # github.repository, never typed here).
+  BIN_NAME: disk-cleaner
+  CLI_PACKAGE: disk-cleaner-cli
+
+jobs:
+  # Decides the tag, version and commit, and refuses a release that should not happen.
+  meta:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      sha: ${{ steps.meta.outputs.sha }}
+      publish: ${{ steps.meta.outputs.publish }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test the guards at this commit
+        run: python3 -I -m unittest discover -s .github/scripts -p 'test_*.py'
+      - id: meta
+        name: Check the tag and record the commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          RUN_ID: ${{ github.run_id }}
+        run: python3 -I .github/scripts/release_meta.py meta
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: meta
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04 so the Linux binary needs glibc 2.35, not the newest.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            ext: ""
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            ext: ""
+            archive: tar.gz
+          # Cross-built on the Apple Silicon runner.
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            ext: ""
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
+            archive: zip
+          # EXTENSION POINT (desktop bundles): the desktop app is built by its own jobs (see the
+          # bundle jobs on the feat/desktop branch's ci.yml). When they are added here, each one
+          # checks out needs.meta.outputs.sha and uploads its installers as an artifact named
+          # release-desktop-<target> containing only the files to publish. The package job puts every
+          # file of every release-* artifact into SHA256SUMS and attests every file SHA256SUMS lists,
+          # whatever its type (.dmg, .msi, .AppImage, .deb included). Signing is a separate decision.
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.meta.outputs.sha }}
+          persist-credentials: false
+      - name: The checkout is the commit meta checked
+        env:
+          SHA: ${{ needs.meta.outputs.sha }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse HEAD)
+          if [ "$head" != "$SHA" ]; then echo "::error::checked out $head, expected $SHA"; exit 1; fi
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --release --locked --target "$TARGET" -p "$CLI_PACKAGE"
+      - name: Smoke test the binary
+        env:
+          TARGET: ${{ matrix.target }}
+          EXT: ${{ matrix.ext }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          exe="target/$TARGET/release/${BIN_NAME}${EXT}"
+          test -f "$exe"
+          if [ "$TARGET" = x86_64-apple-darwin ]; then
+            # Built on an arm64 runner; do not assume it can be run there. Check the architecture.
+            file "$exe" | tee /dev/stderr | grep -q x86_64
+            exit 0
+          fi
+          out=$("$exe" --version)
+          echo "$out"
+          case "$out" in *"$VERSION"*) ;; *) echo "::error::--version does not mention $VERSION"; exit 1 ;; esac
+          mkdir -p smoke/proj/node_modules
+          echo hello > smoke/proj/README.md
+          "$exe" scan smoke --out smoke.json
+          test -s smoke.json
+      - name: Stage the files
+        env:
+          TARGET: ${{ matrix.target }}
+          EXT: ${{ matrix.ext }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          name="${BIN_NAME}-${TAG}-${TARGET}"
+          mkdir -p "dist/$name"
+          cp "target/$TARGET/release/${BIN_NAME}${EXT}" LICENSE README.md "dist/$name/"
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        env:
+          TARGET: ${{ matrix.target }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          name="${BIN_NAME}-${TAG}-${TARGET}"
+          cd dist
+          tar -czf "$name.tar.gz" -- "$name"
+          rm -rf -- "$name"
+          ls -l
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        # The name is read from the environment and used as a literal path, never parsed as code.
+        run: |
+          $name = "$($env:BIN_NAME)-$($env:TAG)-$($env:TARGET)"
+          Set-Location -LiteralPath dist
+          Compress-Archive -LiteralPath $name -DestinationPath "$name.zip"
+          Remove-Item -LiteralPath $name -Recurse -Force
+          Get-ChildItem
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+          retention-days: 14
+          if-no-files-found: error
+
+  # Checksums, release notes and build-provenance attestation over everything the build jobs made.
+  # Runs for the rehearsal too, so attestation is proved before a real tag, and the rehearsal checks
+  # that its own attestations fail the published verification command.
+  package:
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.meta.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS and release notes
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          SHA: ${{ needs.meta.outputs.sha }}
+        run: python3 -I .github/scripts/release_meta.py package
+      - name: Attest build provenance
+        # actions/attest v4.2.2. Public repository: signed through the public Sigstore instance, no
+        # secret. One subject per line of SHA256SUMS, so every published file except SHA256SUMS
+        # itself is attested.
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-checksums: dist/SHA256SUMS
+      - name: Check the published verification command
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          PUBLISH: ${{ needs.meta.outputs.publish }}
+        run: python3 -I .github/scripts/release_meta.py check-attestations
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-files
+          path: |
+            dist/*
+            dist-notes.md
+          retention-days: 14
+          if-no-files-found: error
+
+  # Tag pushes only. Creates a draft; a maintainer publishes it after reading it.
+  draft-release:
+    needs: [meta, package]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.meta.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: out
+      - name: The tag still points at the built commit
+        env:
+          TAG: ${{ needs.meta.outputs.tag }}
+          SHA: ${{ needs.meta.outputs.sha }}
+        run: python3 -I .github/scripts/release_meta.py check-binding
+      # Always a draft, titled "PruneDisk <tag>", pre-release when the tag has a suffix. Uploads every
+      # file in out/dist, re-reads the release by its id and requires exactly those assets. Records
+      # the release's identity (id, node id, tag, author, creation time) for the next step.
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: python3 -I .github/scripts/release_meta.py create-draft
+      # If the tag moved, deletes only the release with the recorded identity, and only while it
+      # is still a draft; a published or replaced release is never deleted (the job fails instead).
+      - name: The tag did not move while the draft was made
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          SHA: ${{ needs.meta.outputs.sha }}
+        run: python3 -I .github/scripts/release_meta.py check-binding --after-create
+
+  # crates.io readiness. Read-only: lists what would be packaged, checks whether each package name is
+  # free on crates.io and runs `cargo publish --dry-run`. Nothing is uploaded and no registry token
+  # is used. It is non-blocking (continue-on-error) until the crates are prepared for publishing;
+  # the step summary says what is still missing. See docs/RELEASING.md, "crates.io".
+  crates-dry-run:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
+      - name: Are the package names free on crates.io?
+        run: |
+          set -uo pipefail
+          for n in $(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; [print(p["name"]) for p in json.load(sys.stdin)["packages"]]'); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -A "${GITHUB_REPOSITORY} release readiness" "https://crates.io/api/v1/crates/$n")
+            echo "$n: HTTP $code (404 = free, 200 = already taken)"
+          done
+      - name: What each package would contain
+        run: |
+          for p in $(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; [print(p["name"]) for p in json.load(sys.stdin)["packages"]]'); do
+            echo "== $p"
+            cargo package --list --locked --allow-dirty -p "$p" || echo "::warning::cargo package --list failed for $p"
+          done
+      - name: cargo publish --dry-run
+        run: cargo publish --dry-run --workspace --locked

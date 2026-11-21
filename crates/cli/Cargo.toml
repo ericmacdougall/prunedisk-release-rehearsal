@@ -1,0 +1,20 @@
+[package]
+name = "disk-cleaner-cli"
+description = "disk-cleaner command line: scan and plan (read-only)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "disk-cleaner"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+disk-cleaner-core = { path = "../core" }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

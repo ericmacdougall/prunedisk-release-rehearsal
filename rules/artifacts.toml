@@ -1,0 +1,519 @@
+# Artifact and cache rules for disk-cleaner. This file is data: extend it without touching code.
+#
+# [[rule]] fields
+#   name          directory name; a name with "/" matches the trailing path components
+#   markers       entries (files or directories) that must exist beside the directory, that is,
+#                 in its parent. A marker further up does not count. "*.ext" matches by suffix.
+#                 Empty list means the name alone is enough (use only for names that are never
+#                 anything else).
+#   class         "regenerable" (rebuilt by the project's tooling) or "cache" (re-downloaded)
+#   scan_outputs  true for build output directories: output files (video, archives, model
+#                 weights...) of any size anywhere in them are listed, even inside a package
+#                 directory. Every artifact, whatever this says, asks when it holds a listed
+#                 output: one of any size that is not in an installed package's directory (see
+#                 fixture_files, fixture_dirs), or one of at least the scan's output threshold.
+#                 Dependency directories (node_modules, venv) leave this false, so the small
+#                 fixtures packages ship inside their own package directories are not listed.
+#   note          one line shown to the user
+#   ask           a reason (read after "it", e.g. "can hold ..."): the directory can hold content
+#                 that exists nowhere else, so it is shown but never offered for removal
+#   ask_if_contains
+#                 entries that, found directly inside the directory, show it is not what the rule
+#                 describes (a user-level home rather than a project cache); it then asks
+#   fixture_files, fixture_dirs
+#                 evidence that a file is part of an installed package, for directories of
+#                 third-party package contents. Packages ship key, certificate and database
+#                 files as test fixtures, so a `fixture_prone` [[state_file]] name is exempt
+#                 only when a directory between the file and the artifact root (the root itself
+#                 excluded) holds a `fixture_files` entry (node_modules: package.json), or the
+#                 file sits in a package directory directly below a `fixture_dirs` name
+#                 (virtual environments: site-packages). Without such evidence, and in every
+#                 rule that defines none, those names are unique state and the directory asks.
+#                 The same evidence decides outputs: an output file below the scan's output
+#                 threshold is listed (and the directory asks) unless it has that evidence.
+#
+# [[state_file]] (end of file): file names that mean "this is not only generated files". They
+# are looked for anywhere under a regenerable or cache directory, and the same rules that carry
+# `ask` / `ask_if_contains` are applied to directories nested inside it.
+#
+# A cache or "regenerable" directory that tools also use to store what the user made (locally
+# installed packages, settings, credentials, state) must carry `ask`.
+#
+# Ambiguous names (dist, build, out, target, bin, obj, coverage, Library, deps) always carry markers.
+
+# ---- Node / JavaScript -------------------------------------------------------------------
+[[rule]]
+name = "node_modules"
+markers = ["package.json"]
+class = "regenerable"
+note = "npm, pnpm and yarn dependencies; restored by an install"
+fixture_files = ["package.json"]
+
+[[rule]]
+name = ".next"
+markers = ["package.json"]
+class = "regenerable"
+scan_outputs = true
+note = "Next.js build output and cache"
+
+[[rule]]
+name = ".nuxt"
+markers = ["package.json"]
+class = "regenerable"
+scan_outputs = true
+note = "Nuxt build output"
+
+[[rule]]
+name = ".output"
+markers = ["nuxt.config.ts", "nuxt.config.js"]
+class = "regenerable"
+scan_outputs = true
+note = "Nuxt/Nitro build output"
+
+[[rule]]
+name = ".turbo"
+markers = ["package.json", "turbo.json"]
+class = "cache"
+note = "Turborepo cache"
+
+[[rule]]
+name = ".svelte-kit"
+markers = ["package.json"]
+class = "regenerable"
+scan_outputs = true
+note = "SvelteKit build output"
+
+[[rule]]
+name = ".parcel-cache"
+markers = ["package.json"]
+class = "cache"
+note = "Parcel cache"
+
+[[rule]]
+name = ".angular"
+markers = ["angular.json"]
+class = "cache"
+note = "Angular CLI cache"
+
+[[rule]]
+name = ".nyc_output"
+markers = ["package.json"]
+class = "regenerable"
+note = "nyc coverage data"
+
+[[rule]]
+name = "dist"
+markers = ["package.json", "pyproject.toml", "setup.py"]
+class = "regenerable"
+scan_outputs = true
+note = "build output"
+
+[[rule]]
+name = "build"
+markers = ["package.json", "build.gradle", "build.gradle.kts", "CMakeLists.txt", "setup.py", "pubspec.yaml"]
+class = "regenerable"
+scan_outputs = true
+note = "build output"
+
+[[rule]]
+name = "out"
+markers = ["package.json", "tsconfig.json", "build.gradle", "build.gradle.kts"]
+class = "regenerable"
+scan_outputs = true
+note = "build output"
+
+[[rule]]
+name = "coverage"
+markers = ["package.json", "pyproject.toml", ".coveragerc"]
+class = "regenerable"
+scan_outputs = true
+note = "test coverage reports"
+
+# ---- Rust --------------------------------------------------------------------------------
+[[rule]]
+name = "target"
+markers = ["Cargo.toml"]
+class = "regenerable"
+scan_outputs = true
+note = "Cargo build output"
+
+[[rule]]
+name = ".cargo/registry"
+markers = []
+class = "cache"
+note = "Cargo crate registry cache"
+fixture_files = ["Cargo.toml"]
+
+[[rule]]
+name = ".cargo/git"
+markers = []
+class = "cache"
+note = "Cargo git dependency checkouts"
+fixture_files = ["Cargo.toml"]
+
+# ---- JVM ---------------------------------------------------------------------------------
+[[rule]]
+name = "target"
+markers = ["pom.xml", "build.sbt"]
+class = "regenerable"
+scan_outputs = true
+note = "Maven or sbt build output"
+
+[[rule]]
+name = ".gradle"
+markers = ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"]
+class = "regenerable"
+note = "Gradle project cache"
+# A build file in the home directory makes ~/.gradle (the Gradle user home) look like a project
+# cache; the user home holds gradle.properties (often credentials) and init scripts.
+ask_if_contains = ["gradle.properties", "init.d", "init.gradle", "init.gradle.kts", "caches", "wrapper"]
+
+[[rule]]
+name = ".gradle/caches"
+markers = []
+class = "cache"
+note = "Gradle user cache"
+
+[[rule]]
+name = ".m2/repository"
+markers = []
+class = "cache"
+note = "Maven local repository"
+ask = "can hold artifacts installed with mvn install or install:install-file that exist nowhere else; not offered for removal until each artifact is shown to be downloadable"
+
+# ---- Python ------------------------------------------------------------------------------
+[[rule]]
+name = ".venv"
+markers = ["pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "Pipfile"]
+class = "regenerable"
+note = "Python virtual environment"
+fixture_dirs = ["site-packages", "dist-packages"]
+
+[[rule]]
+name = "venv"
+markers = ["pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "Pipfile"]
+class = "regenerable"
+note = "Python virtual environment"
+fixture_dirs = ["site-packages", "dist-packages"]
+
+[[rule]]
+name = "__pycache__"
+markers = []
+class = "regenerable"
+note = "Python bytecode"
+
+[[rule]]
+name = ".pytest_cache"
+markers = []
+class = "cache"
+note = "pytest cache"
+
+[[rule]]
+name = ".mypy_cache"
+markers = []
+class = "cache"
+note = "mypy cache"
+
+[[rule]]
+name = ".ruff_cache"
+markers = []
+class = "cache"
+note = "ruff cache"
+
+[[rule]]
+name = ".tox"
+markers = ["tox.ini", "pyproject.toml", "setup.cfg"]
+class = "regenerable"
+note = "tox environments"
+fixture_dirs = ["site-packages", "dist-packages"]
+
+[[rule]]
+name = "htmlcov"
+markers = [".coveragerc", "pyproject.toml", "setup.cfg"]
+class = "regenerable"
+note = "coverage.py HTML report"
+
+[[rule]]
+name = ".cache/pip"
+markers = []
+class = "cache"
+note = "pip download cache"
+
+[[rule]]
+name = ".cache/uv"
+markers = []
+class = "cache"
+note = "uv cache"
+
+# ---- .NET --------------------------------------------------------------------------------
+[[rule]]
+name = "bin"
+markers = ["*.csproj", "*.fsproj", "*.vbproj"]
+class = "regenerable"
+scan_outputs = true
+note = ".NET build output"
+
+[[rule]]
+name = "obj"
+markers = ["*.csproj", "*.fsproj", "*.vbproj"]
+class = "regenerable"
+note = ".NET intermediate output"
+
+[[rule]]
+name = ".nuget/packages"
+markers = []
+class = "cache"
+note = "NuGet package cache"
+fixture_files = ["*.nuspec"]
+
+# ---- Apple / Xcode -----------------------------------------------------------------------
+[[rule]]
+name = "Pods"
+markers = ["Podfile"]
+class = "regenerable"
+note = "CocoaPods dependencies"
+
+[[rule]]
+name = "DerivedData"
+markers = ["*.xcodeproj", "*.xcworkspace"]
+class = "regenerable"
+scan_outputs = true
+note = "Xcode build output"
+
+[[rule]]
+name = "Library/Developer/Xcode/DerivedData"
+markers = []
+class = "cache"
+note = "Xcode build products"
+
+[[rule]]
+name = "Library/Developer/CoreSimulator/Caches"
+markers = []
+class = "cache"
+note = "Simulator caches"
+
+[[rule]]
+name = ".build"
+markers = ["Package.swift"]
+class = "regenerable"
+scan_outputs = true
+note = "SwiftPM build output"
+
+# ---- Infrastructure, Dart, Unity, other --------------------------------------------------
+[[rule]]
+name = ".terraform"
+markers = ["*.tf"]
+class = "regenerable"
+note = "Terraform providers and modules"
+ask = "also records the backend configuration given to terraform init (possibly -backend-config values kept nowhere else) and the selected workspace"
+
+[[rule]]
+name = ".dart_tool"
+markers = ["pubspec.yaml"]
+class = "regenerable"
+note = "Dart tool cache"
+
+[[rule]]
+name = "Library"
+markers = ["ProjectSettings"]
+class = "regenerable"
+note = "Unity import cache"
+
+[[rule]]
+name = "Temp"
+markers = ["ProjectSettings"]
+class = "regenerable"
+note = "Unity temporary files"
+
+[[rule]]
+name = ".stack-work"
+markers = ["stack.yaml"]
+class = "regenerable"
+scan_outputs = true
+note = "Haskell Stack build output"
+
+[[rule]]
+name = "_build"
+markers = ["mix.exs", "dune-project"]
+class = "regenerable"
+scan_outputs = true
+note = "Elixir or OCaml build output"
+
+[[rule]]
+name = "deps"
+markers = ["mix.exs"]
+class = "regenerable"
+note = "Elixir dependencies"
+
+# ---- User-level caches -------------------------------------------------------------------
+[[rule]]
+name = ".npm"
+markers = []
+class = "cache"
+note = "npm cache"
+
+[[rule]]
+name = ".pnpm-store"
+markers = []
+class = "cache"
+note = "pnpm content-addressable store"
+
+[[rule]]
+name = ".cache/ms-playwright"
+markers = []
+class = "cache"
+note = "Playwright browsers"
+
+[[rule]]
+name = "Library/Caches/ms-playwright"
+markers = []
+class = "cache"
+note = "Playwright browsers"
+
+[[rule]]
+name = ".cache/puppeteer"
+markers = []
+class = "cache"
+note = "Puppeteer browsers"
+
+[[rule]]
+name = "Library/Caches/Homebrew"
+markers = []
+class = "cache"
+note = "Homebrew downloads"
+
+[[rule]]
+name = ".cache/go-build"
+markers = []
+class = "cache"
+note = "Go build cache"
+
+[[rule]]
+name = "Library/Caches/go-build"
+markers = []
+class = "cache"
+note = "Go build cache"
+
+[[rule]]
+name = ".cache/pre-commit"
+markers = []
+class = "cache"
+note = "pre-commit environments"
+fixture_dirs = ["site-packages", "dist-packages"]
+
+# ---- Unique-state file names -------------------------------------------------------------
+# Matched on the file name only (never the contents), ignoring case. A pattern is `name`,
+# `*suffix` or `prefix*`. The first match wins, so the plain entries come before the
+# fixture-prone ones. A hit makes the enclosing regenerable or cache directory ask, and through
+# the plan every repo and directory around it.
+[[state_file]]
+pattern = "*.tfstate"
+kind = "Terraform state"
+
+[[state_file]]
+pattern = "terraform.tfstate.*"
+kind = "Terraform state"
+
+[[state_file]]
+pattern = "*.tfvars"
+kind = "Terraform variable values"
+
+[[state_file]]
+pattern = ".env"
+kind = "environment settings (.env)"
+
+[[state_file]]
+pattern = ".env.*"
+kind = "environment settings (.env)"
+except = [".env.example", ".env.sample", ".env.template", ".env.dist"]
+
+[[state_file]]
+pattern = "id_rsa"
+kind = "a private SSH key"
+
+[[state_file]]
+pattern = "id_ed25519"
+kind = "a private SSH key"
+
+[[state_file]]
+pattern = "*.sqlite"
+kind = "a local database"
+fixture_prone = true
+
+[[state_file]]
+pattern = "*.sqlite3"
+kind = "a local database"
+fixture_prone = true
+
+[[state_file]]
+pattern = "*.db"
+kind = "a local database"
+fixture_prone = true
+
+[[state_file]]
+pattern = "*.pem"
+kind = "a certificate or private key"
+fixture_prone = true
+
+[[state_file]]
+pattern = "*.key"
+kind = "a private key"
+fixture_prone = true
+
+[[state_file]]
+pattern = "*.keystore"
+kind = "a key store"
+fixture_prone = true
+
+[[state_file]]
+pattern = "*.jks"
+kind = "a key store"
+fixture_prone = true
+
+[[state_file]]
+pattern = "*.p12"
+kind = "a certificate bundle with its private key"
+fixture_prone = true
+
+# ---- Output files ------------------------------------------------------------------------
+# Files with these extensions are produced work, not artifacts. Found inside any regenerable or
+# cache directory they are listed individually and the directory is not offered for removal,
+# unless the file sits in an installed package's directory and is below the output threshold.
+[outputs]
+extensions = [
+    # video
+    "mp4", "mov", "mkv", "avi", "webm", "m4v", "wmv", "flv",
+    # audio
+    "mp3", "wav", "flac", "aac", "m4a", "ogg", "opus", "aiff",
+    # image projects
+    "psd", "psb", "ai", "xcf", "kra", "blend", "sketch", "indd", "afdesign",
+    # archives and disk images
+    "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "zst", "iso", "dmg",
+    # model weights
+    "safetensors", "ckpt", "pt", "pth", "onnx", "gguf", "h5", "tflite",
+    # virtual machine disks
+    "vmdk", "vdi", "vhd", "vhdx", "qcow2",
+    # database dumps and local databases
+    "sql", "dump", "bak", "sqlite", "sqlite3", "mdb", "db", "duckdb",
+    # images and documents
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "exr", "heic", "dng", "raw", "pdf",
+    # datasets and arrays
+    "csv", "tsv", "parquet", "npy", "npz", "jsonl", "arrow", "feather", "hdf5", "nc",
+    # more model weights
+    "bin", "keras", "npz",
+]
+
+# ---- Loose code --------------------------------------------------------------------------
+# A directory outside any repo that holds one of these manifests, or source files directly,
+# is "loose code": the user is asked what to do with it.
+[loose_code]
+manifests = [
+    "package.json", "Cargo.toml", "pyproject.toml", "setup.py", "requirements.txt", "Pipfile",
+    "go.mod", "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "Gemfile",
+    "composer.json", "pubspec.yaml", "mix.exs", "CMakeLists.txt", "Makefile", "Package.swift",
+    "*.csproj", "*.fsproj", "*.sln", "*.xcodeproj",
+]
+source_extensions = [
+    "rs", "py", "js", "jsx", "ts", "tsx", "go", "java", "kt", "c", "cc", "cpp", "h", "hpp",
+    "cs", "rb", "php", "swift", "m", "scala", "sh", "lua", "ex", "exs", "dart", "zig",
+]

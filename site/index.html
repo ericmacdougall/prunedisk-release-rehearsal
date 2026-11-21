@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PruneDisk: know what is safe to remove</title>
+<meta name="description" content="Early, read-only: PruneDisk scans a developer machine and plans what is safe to remove. It deletes nothing yet.">
+<meta name="color-scheme" content="light dark">
+<meta property="og:type" content="website">
+<meta property="og:title" content="PruneDisk: know what is safe to remove">
+<meta property="og:site_name" content="PruneDisk">
+<meta property="og:description" content="Early, read-only: PruneDisk scans a developer machine and plans what is safe to remove. It deletes nothing yet.">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="brand/favicon.svg" type="image/svg+xml">
+<style>/* PruneDisk site. No external requests: system fonts only, no build step. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #fbfaf6;
+  --surface: #f1eee6;
+  --text: #1b2420;
+  --muted: #485650;
+  --accent: #0b5d56;
+  --on-accent: #ffffff;
+  --border: #78837d;
+  --rule: #d9d5c9;
+  --on-class: #ffffff;
+  --c-repo: #2f5fb3;
+  --c-worktree: #6d49b8;
+  --c-regen: #b45309;
+  --c-cache: #9a3f1b;
+  --c-agent: #a3306f;
+  --c-output: #1f7a4d;
+  --c-loose: #5f6b66;
+  --focus: #0b5d56;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1513;
+    --surface: #18201d;
+    --text: #e8eeea;
+    --muted: #a8b6af;
+    --accent: #5ed6c8;
+    --on-accent: #0f1513;
+    --border: #6f7f78;
+    --rule: #2a3531;
+    --on-class: #0f1513;
+    --c-repo: #7aa7f0;
+    --c-worktree: #b79cf0;
+    --c-regen: #f0a54a;
+    --c-cache: #e8855a;
+    --c-agent: #e879b4;
+    --c-output: #5fcf93;
+    --c-loose: #9aa7a1;
+    --focus: #5ed6c8;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 1rem/1.6 var(--sans);
+  overflow-wrap: break-word;
+}
+
+.wrap { width: 100%; max-width: 62rem; margin: 0 auto; padding: 0 1rem; }
+
+a { color: var(--accent); text-underline-offset: 0.2em; }
+a:hover { text-decoration-thickness: 2px; }
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.skip {
+  position: absolute;
+  left: 1rem;
+  top: 0;
+  transform: translateY(-120%);
+  background: var(--accent);
+  color: var(--on-accent);
+  padding: 0.5rem 0.9rem;
+  border-radius: 0 0 6px 6px;
+  z-index: 10;
+}
+.skip:focus { transform: translateY(0); }
+
+/* Header */
+.site-header { border-bottom: 1px solid var(--rule); }
+.site-header .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1.5rem; padding-top: 0.9rem; padding-bottom: 0.9rem; }
+.brand { display: inline-flex; align-items: center; gap: 0.6rem; color: var(--text); text-decoration: none; font: 700 1.2rem/1 var(--sans); letter-spacing: -0.01em; }
+.brand svg { width: 28px; height: 28px; flex: none; }
+.nav { display: flex; flex-wrap: wrap; gap: 0.25rem 1.1rem; margin: 0; padding: 0; list-style: none; }
+.nav a { color: var(--text); text-decoration: none; display: inline-block; padding: 0.35rem 0; }
+.nav a:hover { text-decoration: underline; }
+
+/* Type */
+h1, h2, h3 { line-height: 1.2; margin: 0 0 0.75rem; letter-spacing: -0.01em; }
+h1 { font-size: clamp(1.9rem, 6vw, 3rem); }
+h2 { font-size: clamp(1.4rem, 4vw, 1.9rem); }
+h3 { font-size: 1.1rem; }
+p { margin: 0 0 1rem; max-width: 42rem; }
+code { font: 0.9em var(--mono); background: var(--surface); padding: 0.1em 0.35em; border-radius: 4px; }
+.lede { font-size: 1.2rem; color: var(--text); }
+.muted { color: var(--muted); }
+
+section { padding: 3rem 0; border-bottom: 1px solid var(--rule); }
+section:last-of-type { border-bottom: 0; }
+
+/* Hero */
+.hero { padding: 3rem 0 2.5rem; }
+.status-note {
+  display: block;
+  max-width: 42rem;
+  margin: 0 0 1.5rem;
+  padding: 0.8rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left-width: 6px;
+  border-radius: 6px;
+}
+.status-note strong { font-weight: 700; }
+.cta-row { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.25rem; }
+.btn {
+  display: inline-block;
+  padding: 0.65rem 1.1rem;
+  border-radius: 6px;
+  border: 2px solid var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+.btn.secondary { background: transparent; color: var(--accent); }
+.btn:hover { text-decoration: underline; }
+
+/* Illustration: fixed aspect ratio so nothing shifts when it paints. */
+figure { margin: 1.5rem 0 0; }
+figure svg { display: block; width: 100%; height: auto; aspect-ratio: 640 / 340; }
+figcaption { color: var(--muted); font-size: 0.9rem; margin-top: 0.5rem; max-width: 42rem; }
+.tile-repo { fill: var(--c-repo); }
+.tile-worktree { fill: var(--c-worktree); }
+.tile-regen { fill: var(--c-regen); }
+.tile-cache { fill: var(--c-cache); }
+.tile-agent { fill: var(--c-agent); }
+.tile-output { fill: var(--c-output); }
+.tile-loose { fill: var(--c-loose); }
+.tile-label { fill: var(--on-class); font: 700 15px var(--sans); }
+.tile-sub { fill: var(--on-class); font: 13px var(--mono); }
+
+/* Small screens: tile text would shrink below legibility, so a numbered legend replaces it.
+   The numbers on the tiles match the legend, so it does not rely on color alone. */
+.tile-key { display: none; fill: var(--on-class); font: 700 40px var(--sans); }
+.legend { display: none; list-style: none; margin: 0.75rem 0 0; padding: 0; font-size: 0.9rem; }
+.legend li { margin-bottom: 0.3rem; }
+.legend .key { display: inline-block; min-width: 1.2em; font-weight: 700; }
+@media (max-width: 44rem) {
+  .legend { display: block; }
+  .tile-label, .tile-sub { display: none; }
+  .tile-key { display: inline; }
+}
+
+/* Tables */
+.table-wrap { width: 100%; }
+table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.95rem; }
+caption { text-align: left; color: var(--muted); padding-bottom: 0.5rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--rule); }
+thead th { border-bottom: 2px solid var(--border); }
+tbody th { font-weight: 600; white-space: nowrap; }
+.dot { display: inline-block; width: 0.8rem; height: 0.8rem; border-radius: 3px; margin-right: 0.45rem; vertical-align: -0.05rem; }
+.badge { display: inline-block; padding: 0.1rem 0.5rem; border: 1px solid var(--border); border-radius: 999px; font-size: 0.85rem; white-space: nowrap; background: var(--surface); }
+
+@media (max-width: 40rem) {
+  .stack thead { position: absolute; left: -9999px; }
+  .stack caption { display: block; width: 100%; }
+  .stack, .stack tbody, .stack tr, .stack th, .stack td { display: block; width: 100%; }
+  .stack tr { border: 1px solid var(--rule); border-radius: 8px; margin-bottom: 0.75rem; padding: 0.4rem 0; background: var(--surface); }
+  .stack th, .stack td { border: 0; padding: 0.25rem 0.9rem; white-space: normal; }
+  .stack td::before { content: attr(data-label) ": "; font-weight: 600; color: var(--muted); }
+}
+
+/* Lists */
+.facts { padding-left: 1.2rem; max-width: 42rem; }
+.facts li { margin-bottom: 0.5rem; }
+.grid { display: grid; gap: 1rem 2rem; grid-template-columns: 1fr; }
+@media (min-width: 48rem) {
+  .grid.two { grid-template-columns: 1fr 1fr; }
+}
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 1rem 1.1rem; }
+.card h3 { margin-bottom: 0.4rem; }
+.card p { margin-bottom: 0; }
+
+/* CLI example */
+pre {
+  margin: 1rem 0;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  overflow-x: auto;
+  font: 0.82rem/1.5 var(--mono);
+  max-width: 100%;
+}
+pre code { background: none; padding: 0; font: inherit; }
+
+.site-footer { padding: 2rem 0 3rem; color: var(--muted); font-size: 0.95rem; border-top: 1px solid var(--rule); }
+.site-footer p { max-width: none; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .btn, a { transition: background-color 0.15s ease, color 0.15s ease; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+</style>
+</head>
+<body id="top">
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="PruneDisk, top of page">
+      <svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+        <rect x="3" y="3" width="36" height="58" rx="7" fill="var(--accent)"/>
+        <rect x="43" y="3" width="18" height="27" rx="6" fill="var(--c-regen)"/>
+        <rect x="43" y="34" width="18" height="27" rx="6" fill="var(--c-repo)"/>
+      </svg>
+      PruneDisk
+    </a>
+    <nav aria-label="Page sections">
+      <ul class="nav">
+        <li><a href="#problem">Problem</a></li>
+        <li><a href="#safety">Safety</a></li>
+        <li><a href="#status">Status</a></li>
+        <li><a href="#download">Download</a></li>
+        <li><a href="#example">Example</a></li>
+        <li><a href="#follow">Follow along</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" aria-labelledby="h-hero">
+    <div class="wrap">
+      <p class="status-note"><strong>Early.</strong> Only a read-only command-line scanner and planner exists. It is merged into the main branch; if the <a href="https://github.com/ericmacdougall/disk-cleaner/releases">releases page</a> lists no release yet, you build it from source (see <a href="#download">Download</a>). It deletes nothing. Its command and the repository are still called <code>disk-cleaner</code>. There is no desktop app, installer or store listing yet.</p>
+      <h1 id="h-hero">Know what is safe to remove.</h1>
+      <p class="lede">PruneDisk is a free, open-source disk analyzer for developer machines. Today a read-only command-line tool scans a disk, works out what each folder is (a git repo, a worktree, a rebuildable folder, a cache) and plans what could be removed, backed up first, or left alone. It deletes nothing. It is being built into a cleaner for Windows, macOS and Linux, which are the target platforms: the project's automated build and tests run on all three.</p>
+      <div class="cta-row">
+        <a class="btn" href="https://github.com/ericmacdougall/disk-cleaner">Follow the project on GitHub</a>
+        <a class="btn secondary" href="#status">See what exists today</a>
+      </div>
+
+      <figure>
+        <svg viewBox="0 0 640 340" role="img" aria-labelledby="fig-t fig-d">
+          <title id="fig-t">Illustration of a disk drawn as a treemap, colored and numbered by class</title>
+          <desc id="fig-d">A rectangle split into eight blocks of seven classes. The largest is regenerable folders such as node_modules and target. Others are a git repo, linked worktrees, caches, agent session logs, output files and loose code. The sizes are invented.</desc>
+          <rect class="tile-regen" x="0" y="0" width="300" height="200" rx="6"/>
+          <text class="tile-key" x="16" y="54">1</text>
+          <text class="tile-label" x="14" y="30">regenerable</text>
+          <text class="tile-sub" x="14" y="52">node_modules, target, .venv</text>
+          <rect class="tile-cache" x="0" y="204" width="300" height="136" rx="6"/>
+          <text class="tile-key" x="16" y="258">2</text>
+          <text class="tile-label" x="14" y="234">cache</text>
+          <text class="tile-sub" x="14" y="256">package manager caches</text>
+          <rect class="tile-repo" x="304" y="0" width="200" height="160" rx="6"/>
+          <text class="tile-key" x="320" y="54">3</text>
+          <text class="tile-label" x="318" y="30">repo</text>
+          <text class="tile-sub" x="318" y="52">a git clone</text>
+          <rect class="tile-worktree" x="304" y="164" width="200" height="90" rx="6"/>
+          <text class="tile-key" x="320" y="218">4</text>
+          <text class="tile-label" x="318" y="194">worktree</text>
+          <text class="tile-sub" x="318" y="216">linked checkouts</text>
+          <rect class="tile-agent" x="304" y="258" width="200" height="82" rx="6"/>
+          <text class="tile-key" x="320" y="312">5</text>
+          <text class="tile-label" x="318" y="288">agent-session</text>
+          <text class="tile-sub" x="318" y="310">transcripts, logs</text>
+          <rect class="tile-output" x="508" y="0" width="132" height="120" rx="6"/>
+          <text class="tile-key" x="524" y="54">6</text>
+          <text class="tile-label" x="522" y="30">output</text>
+          <text class="tile-sub" x="522" y="52">video, models</text>
+          <rect class="tile-loose" x="508" y="124" width="132" height="70" rx="6"/>
+          <text class="tile-key" x="524" y="178">7</text>
+          <text class="tile-label" x="522" y="154">loose-code</text>
+          <text class="tile-sub" x="522" y="176">no repo</text>
+          <rect class="tile-repo" x="508" y="198" width="132" height="142" rx="6"/>
+          <text class="tile-key" x="524" y="252">3</text>
+          <text class="tile-label" x="522" y="228">repo</text>
+          <text class="tile-sub" x="522" y="250">another clone</text>
+        </svg>
+        <ul class="legend">
+          <li><span class="dot" style="background:var(--c-regen)"></span><span class="key">1</span>regenerable: node_modules, target, .venv</li>
+          <li><span class="dot" style="background:var(--c-cache)"></span><span class="key">2</span>cache: package manager caches</li>
+          <li><span class="dot" style="background:var(--c-repo)"></span><span class="key">3</span>repo: a git clone</li>
+          <li><span class="dot" style="background:var(--c-worktree)"></span><span class="key">4</span>worktree: linked checkouts</li>
+          <li><span class="dot" style="background:var(--c-agent)"></span><span class="key">5</span>agent-session: transcripts, logs</li>
+          <li><span class="dot" style="background:var(--c-output)"></span><span class="key">6</span>output: video, models</li>
+          <li><span class="dot" style="background:var(--c-loose)"></span><span class="key">7</span>loose-code: source outside any repo</li>
+        </ul>
+        <figcaption>A drawing of the idea, not a screenshot: color says what a folder is, and area says how much space it takes. The sizes are invented. The desktop views are planned and do not exist yet.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="problem" aria-labelledby="h-problem">
+    <div class="wrap">
+      <h2 id="h-problem">The problem</h2>
+      <p>A developer disk fills up in a particular way. Hundreds of clones. Linked worktrees an agent created and never tidied. A <code>node_modules</code> or <code>target</code> folder in every project you have ever touched. Package caches. Gigabytes of coding-agent transcripts and logs. Rendered videos and model files that were never meant to go into git.</p>
+      <p>A general disk tool shows you one big folder and leaves the judgment to you. The risky part is that the folder next to it may hold the only copy of an unpushed branch, a stash, or a <code>.env</code> file. PruneDisk is being built to tell those cases apart before anything is touched.</p>
+    </div>
+  </section>
+
+  <section id="safety" aria-labelledby="h-safety">
+    <div class="wrap">
+      <h2 id="h-safety">How it decides what is safe</h2>
+      <p>Every directory gets one class. The classes come from the project's <a href="https://github.com/ericmacdougall/disk-cleaner/blob/main/docs/DESIGN.md">design document</a>; the read-only scanner assigns repo, worktree, bare-repo, regenerable, cache and loose-code (everything else is "other"), and lists output files individually. Agent-session handling is designed but not built. The last column says what today's plan proposes for an idle project; what the design adds later is marked Planned. Nothing is removed yet: the step that applies a plan is planned too.</p>
+
+      <div class="table-wrap">
+        <table class="stack" role="table">
+          <caption role="caption">Classes and what today's plan proposes for them</caption>
+          <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Class</th><th scope="col" role="columnheader">What it is</th><th scope="col" role="columnheader">Today's plan</th></tr></thead>
+          <tbody role="rowgroup">
+            <tr role="row"><th scope="row" role="rowheader"><span class="dot" style="background:var(--c-repo)"></span>repo</th><td role="cell" data-label="What it is">A directory with a <code>.git</code> directory.</td><td role="cell" data-label="Today's plan">Keep while active. When idle: back up then remove, recover first, or ask, depending on the facts below.</td></tr>
+            <tr role="row"><th scope="row" role="rowheader"><span class="dot" style="background:var(--c-worktree)"></span>worktree</th><td role="cell" data-label="What it is">A linked git worktree.</td><td role="cell" data-label="Today's plan">Like a repo, checked against its own HEAD.</td></tr>
+            <tr role="row"><th scope="row" role="rowheader"><span class="dot" style="background:var(--text)"></span>bare-repo</th><td role="cell" data-label="What it is">A bare git repository.</td><td role="cell" data-label="Today's plan">Keep while a worktree or clone depends on it; otherwise ask.</td></tr>
+            <tr role="row"><th scope="row" role="rowheader"><span class="dot" style="background:var(--c-regen)"></span>regenerable</th><td role="cell" data-label="What it is"><code>node_modules</code>, <code>target</code>, <code>.venv</code>, <code>.next</code>, <code>DerivedData</code>.</td><td role="cell" data-label="Today's plan"><code>remove-regenerable</code> when the owning project is idle; ask if its activity cannot be judged or it holds output files.</td></tr>
+            <tr role="row"><th scope="row" role="rowheader"><span class="dot" style="background:var(--c-cache)"></span>cache</th><td role="cell" data-label="What it is">Package manager and tool caches.</td><td role="cell" data-label="Today's plan">Treated like a regenerable folder: <code>remove-regenerable</code> when its project is idle, otherwise kept or asked. Planned: age and size policies.</td></tr>
+            <tr role="row"><th scope="row" role="rowheader"><span class="dot" style="background:var(--c-agent)"></span>agent-session</th><td role="cell" data-label="What it is">Coding-agent transcripts, logs and work directories.</td><td role="cell" data-label="Today's plan">Not detected yet. Planned: back up first, remove only after a verified backup and an age threshold.</td></tr>
+            <tr role="row"><th scope="row" role="rowheader"><span class="dot" style="background:var(--c-output)"></span>output</th><td role="cell" data-label="What it is">Video, audio, images, archives, model weights, datasets.</td><td role="cell" data-label="Today's plan">Keep: listed for analysis only. Planned: never to git; back up, then remove by policy.</td></tr>
+            <tr role="row"><th scope="row" role="rowheader"><span class="dot" style="background:var(--c-loose)"></span>loose-code</th><td role="cell" data-label="What it is">Source files or a project manifest outside any repo.</td><td role="cell" data-label="Today's plan">Ask: connect a remote, back up, remove, or leave.</td></tr>
+            <tr role="row"><th scope="row" role="rowheader"><span class="dot" style="background:var(--muted)"></span>system, user-data</th><td role="cell" data-label="What it is">Operating system files, documents, photos.</td><td role="cell" data-label="Today's plan">Keep: analysis only. Today these count as "other".</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>What it checks before it calls a repo safe</h3>
+      <p>For every repo and worktree the scanner records eleven facts. Each is yes, no or unknown. <strong>Unknown never counts as yes</strong>: a check that fails or times out leaves the fact unknown, and an unknown fact never leads the plan to propose removal; for an idle repo it asks you instead.</p>
+      <ul class="facts">
+        <li>It has at least one network remote. A local path or a bundle file is not a backup.</li>
+        <li>The checked-out commit is on a remote branch, including a detached HEAD.</li>
+        <li>Every local branch is on a remote. A repo with local tags stays unknown until the remote itself is asked.</li>
+        <li>The stash is empty.</li>
+        <li>The working tree is clean: no changes and no untracked files.</li>
+        <li>There are no ignored files that exist only here, such as <code>.env</code> or a local database.</li>
+        <li>No other clone or worktree depends on this one.</li>
+        <li>Every commit the reflogs still remember, such as one left behind by a reset or a rebase, is on a remote.</li>
+        <li>No rebase, merge, cherry-pick, revert or bisect is half finished, and the git directory holds no Git LFS or git-annex objects, which may exist only here.</li>
+        <li>The repository has a plain layout, with nothing unusual in its git directory.</li>
+        <li>The git directory holds nothing of its own, such as a custom hook or a setting only this copy has.</li>
+      </ul>
+      <p>For an idle repo the plan proposes <code>backup-then-remove</code> when all eleven are yes: back up its git directory, then remove it. When some facts are no and none is unknown, it proposes <code>recover-backup-then-remove</code>: recover the missing work first, then back up and remove. When any fact is unknown, or the repo has dependents, an unusual layout or files of its own in its git directory, it asks you (<code>ask</code>). It also asks when git is told to hide edits to some files (skip-worktree or assume-unchanged), even if every fact is yes. It always says why. Remote facts come from local remote-tracking refs, which can be stale, so the plan marks them unverified. Re-checking them against the live remote at the moment of removal is planned for the step that applies a plan.</p>
+
+      <div class="grid two">
+        <div class="card"><h3>Plan, then apply</h3><p>Scanning and planning are read-only. Today the plan is printed, as a summary or as JSON with <code>--json</code>, which you can save and read. In the design a plan is a file you edit and approve, and apply, when it exists, will do exactly that plan.</p></div>
+        <div class="card"><h3>Everything removed will be findable</h3><p>The design writes each removal to a manifest with a restore command. That part is planned, not built.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="status" aria-labelledby="h-status">
+    <div class="wrap">
+      <h2 id="h-status">What exists today and what is planned</h2>
+      <p>Last checked against the project repository on 19 November 2026. The repository is the source of truth; this table can lag it.</p>
+      <div class="table-wrap">
+        <table class="stack" role="table">
+          <caption role="caption">Status of each part of the project</caption>
+          <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Part</th><th scope="col" role="columnheader">Status</th><th scope="col" role="columnheader">Notes</th></tr></thead>
+          <tbody role="rowgroup">
+            <tr role="row"><th scope="row" role="rowheader">Design</th><td role="cell" data-label="Status"><span class="badge">Written</span></td><td role="cell" data-label="Notes">Draft design document in the repository.</td></tr>
+            <tr role="row"><th scope="row" role="rowheader">CLI: scan and plan</th><td role="cell" data-label="Status"><span class="badge">Merged</span></td><td role="cell" data-label="Notes">Read-only. On the main branch. Prebuilt programs are on the releases page only once the maintainer publishes a release (see Download). Produces JSON and a readable summary. Deletes nothing.</td></tr>
+            <tr role="row"><th scope="row" role="rowheader">Recovery, backup, apply, restore</th><td role="cell" data-label="Status"><span class="badge">Planned</span></td><td role="cell" data-label="Notes">Recovery branches, rclone backup connectors, removal with a manifest, restore. Nothing of it is on the main branch yet.</td></tr>
+            <tr role="row"><th scope="row" role="rowheader">Desktop app</th><td role="cell" data-label="Status"><span class="badge">Planned</span></td><td role="cell" data-label="Notes">Sunburst, treemap and outline views. Nothing of it is on the main branch yet.</td></tr>
+            <tr role="row"><th scope="row" role="rowheader">App stores and installers</th><td role="cell" data-label="Status"><span class="badge">Planned</span></td><td role="cell" data-label="Notes">No installer or store listing yet. Binary archives, unsigned, are the only form of release.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="download" aria-labelledby="h-download">
+    <div class="wrap">
+      <h2 id="h-download">Download or build it</h2>
+      <p>Once the maintainer publishes a release, prebuilt command-line programs are on the project's <a href="https://github.com/ericmacdougall/disk-cleaner/releases">releases page</a>. Each published release has one archive each for Linux (x86-64), macOS (Apple Silicon and Intel) and Windows (x86-64), plus a <code>SHA256SUMS</code> file. Tagging a version only prepares a draft, which the maintainer reads and then publishes by hand. If that page lists no release yet, there is nothing to download; build from source instead.</p>
+      <h3>The programs are not signed</h3>
+      <p>The archives are not code-signed or notarized. On macOS, Gatekeeper can refuse a program downloaded in a browser until you remove its quarantine mark. On Windows, SmartScreen can warn before it runs. Check the download first, as below, then follow the steps in the release notes.</p>
+      <h3>Check what you downloaded</h3>
+<pre tabindex="0" role="region" aria-label="Commands that check a downloaded release"><code># the file matches the checksum list (Linux)
+sha256sum -c --ignore-missing SHA256SUMS
+
+# the file was built by this repository's release workflow for the tag vX.Y.Z
+gh attestation verify &lt;archive file name&gt; --repo ericmacdougall/disk-cleaner --signer-workflow ericmacdougall/disk-cleaner/.github/workflows/release.yml --source-ref refs/tags/vX.Y.Z --deny-self-hosted-runners</code></pre>
+      <p>Put the release's version, for example <code>v0.1.0</code>, in place of <code>vX.Y.Z</code>. A checksum shows the download is complete and matches the release page. The attestation, checked with the GitHub command-line tool, shows the file was built on a GitHub-hosted runner by this repository's release workflow for that version's tag. It does not show the code is free of bugs or that anyone reviewed it; that rests on the repository's rules and on the maintainer's publish step.</p>
+      <h3>Build from source</h3>
+      <p>You need a stable Rust toolchain and <code>git</code>. The <a href="https://github.com/ericmacdougall/disk-cleaner/blob/main/README.md">README</a> has the commands. The command is still called <code>disk-cleaner</code> until the planned rename.</p>
+    </div>
+  </section>
+
+  <section id="example" aria-labelledby="h-example">
+    <div class="wrap">
+      <h2 id="h-example">What the scanner prints</h2>
+      <p>The shape below follows the summary the command-line scanner prints and the format in the project's scan documentation. The paths and sizes are invented for this page. Some sections are left out, such as the list of biggest files, long lines are shortened, and the facts the tool prints on one line are wrapped here. It is not output from a real machine. In it, example-app-fix is a linked worktree of example-app, so example-app has a dependent. example-app was changed two days ago, so it is active and kept with its <code>node_modules</code>, while the folders of example-service and the example-notes repo have been idle for weeks.</p>
+<pre tabindex="0" role="region" aria-label="Example scanner output"><code>$ disk-cleaner scan ~/projects --out scan.json
+Scanned ~/projects
+18402 files, 1311 directories, 4.3 GiB allocated (4.1 GiB logical)
+
+Space by class (innermost classified ancestor):
+  regenerable     3.0 GiB
+  repo          600.0 MiB
+  worktree      240.6 MiB
+  other         208.0 MiB
+  loose-code    180.0 MiB
+  cache          96.0 MiB
+
+Repos and worktrees (3):
+  [repo] ~/projects/example-app  2.4 GiB
+      has_network_remote=yes head_on_remote=yes all_branches_on_remote=yes
+      stash_empty=yes tree_clean=yes no_unique_ignored=yes no_dependents=NO
+      reflog_saved=yes no_pending_state=yes plain_layout=yes
+      no_local_admin_content=yes
+      .git 310.2 MiB, regenerable 1.9 GiB, outputs 0 B
+  [worktree] ~/projects/example-app-fix  240.6 MiB
+      ...
+      .git 4.0 KiB, regenerable 0 B, outputs 0 B
+  [repo] ~/projects/example-notes  88.0 MiB
+      has_network_remote=yes head_on_remote=NO all_branches_on_remote=NO
+      stash_empty=NO tree_clean=NO no_unique_ignored=yes no_dependents=yes
+      reflog_saved=NO no_pending_state=yes plain_layout=yes
+      no_local_admin_content=yes
+      .git 12.5 MiB, regenerable 0 B, outputs 0 B
+
+Regenerable and cache directories (3):
+     1.9 GiB  ~/projects/example-app/node_modules
+     1.1 GiB  ~/projects/example-service/target
+    96.0 MiB  ~/projects/example-service/.mypy_cache
+
+Scan written to scan.json
+
+$ disk-cleaner plan --scan scan.json
+Dry-run plan (nothing is changed). Active window: 7 days (from default).
+Running-process check: ok
+Scope: subtree. Dependents (linked worktrees, shared object stores) were looked ...
+Coverage: complete (every folder was read).
+Remote facts verified: no (remote facts come from local remote-tracking refs, ...)
+...
+Items:
+  remove-regenerable            1.1 GiB  [regenerable] ~/projects/example-service/target
+  remove-regenerable           96.0 MiB  [cache] ~/projects/example-service/.mypy_cache
+  recover-backup-then-remove   88.0 MiB  [repo] ~/projects/example-notes
+  ...
+      (items that reclaim nothing, states and reasons abridged)</code></pre>
+      <p class="muted">The command is still called <code>disk-cleaner</code> today; renaming it to <code>prunedisk</code> is planned. The plan only describes what would happen. In the current version no command removes, moves or changes anything. The scanner writes a file only where you give <code>--out</code>.</p>
+    </div>
+  </section>
+
+  <section id="follow" aria-labelledby="h-follow">
+    <div class="wrap">
+      <h2 id="h-follow">Follow along</h2>
+      <p>The project is developed in the open. The best way to follow it is the repository: the design document, the scanner's source and its scan format documentation, and the issue tracker. The repository is still named disk-cleaner; renaming the repository and the command to prunedisk is planned, not done. There is no mailing list, no account to create and no installer yet. Until a release is published you build the program from source; a published release is an archive holding the program, to unpack and run.</p>
+      <p><a class="btn" href="https://github.com/ericmacdougall/disk-cleaner">github.com/ericmacdougall/disk-cleaner</a></p>
+      <h3>License</h3>
+      <p>MIT. Free to use, change and share. See the <a href="https://github.com/ericmacdougall/disk-cleaner/blob/main/LICENSE">license file</a>.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <p>PruneDisk is an early open-source project under the MIT license. This page loads no scripts, fonts, analytics or third-party resources.</p>
+  </div>
+</footer>
+</body>
+</html>

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <title>PruneDisk</title>
+  <style>
+    .a { fill: #0b5d56; }
+    .b { fill: #b45309; }
+    .c { fill: #2f5fb3; }
+    @media (prefers-color-scheme: dark) {
+      .a { fill: #5ed6c8; }
+      .b { fill: #f0a54a; }
+      .c { fill: #7aa7f0; }
+    }
+  </style>
+  <!-- Same mark with fewer pixels of gap and rounder-free edges so it holds at 16 px. -->
+  <rect class="a" x="1" y="1" width="18" height="30" rx="3"/>
+  <rect class="b" x="22" y="1" width="9" height="14" rx="2.5"/>
+  <rect class="c" x="22" y="17" width="9" height="14" rx="2.5"/>
+</svg>

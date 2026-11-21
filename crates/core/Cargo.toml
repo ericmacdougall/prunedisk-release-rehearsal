@@ -1,0 +1,26 @@
+[package]
+name = "disk-cleaner-core"
+description = "Read-only scan, classification, repo safety facts and dry-run planning for disk-cleaner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "disk_cleaner_core"
+
+[dependencies]
+jwalk = "0.9"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+thiserror = "1"
+toml = "0.8"
+
+# Only the O_NONBLOCK and O_NOFOLLOW constants (no unsafe code): see src/regular.rs.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
+[dev-dependencies]
+tempfile = "3"
