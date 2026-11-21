@@ -180,7 +180,7 @@ checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "disk-cleaner-cli"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "disk-cleaner-core"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "jwalk",
  "libc",
